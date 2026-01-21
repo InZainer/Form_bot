@@ -2,7 +2,9 @@ import logging
 import os
 from dataclasses import dataclass, asdict
 
+from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
@@ -19,11 +21,11 @@ from aiogram.types import (
 
 # Импорт конфигурации
 try:
-    from config import BOT_TOKEN as CONFIG_BOT_TOKEN, ADMIN_ID as CONFIG_ADMIN_ID
+    load_dotenv()
+    BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+    ADMIN_ID = int(os.getenv("ADMIN_ID", ""))
 except ImportError:
-    CONFIG_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
-    CONFIG_ADMIN_ID = 0
-    logging.warning("config.py не найден. Используйте переменные окружения или создайте config.py")
+    logging.warning(".env не найден. Используйте переменные окружения или создайте config.py")
 
 
 logging.basicConfig(
@@ -632,10 +634,7 @@ async def reply_to_user_callback(callback: CallbackQuery, state: FSMContext) -> 
 
 async def handle_admin_reply_message(message: Message, state: FSMContext) -> None:
     """Обработка сообщения от админа для отправки пользователю"""
-    logger.info(f"handle_admin_reply_message called from user {message.from_user.id}")
-    
     if message.from_user.id != ADMIN_ID:
-        logger.warning(f"Non-admin user {message.from_user.id} tried to use admin reply handler")
         return
     
     if message.text and message.text.strip() == "/cancel":
@@ -644,7 +643,6 @@ async def handle_admin_reply_message(message: Message, state: FSMContext) -> Non
         return
     
     data = await state.get_data()
-    logger.info(f"State data: {data}")
     user_id = data.get("replying_to_user_id")
     
     if not user_id:
@@ -778,7 +776,7 @@ def setup_handlers(dp: Dispatcher) -> None:
 
 
 async def main() -> None:
-    bot = Bot(BOT_TOKEN, parse_mode=ParseMode.HTML)
+    bot = Bot(token=BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 

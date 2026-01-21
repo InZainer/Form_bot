@@ -40,13 +40,6 @@ logger = logging.getLogger(__name__)
 # =============================
 # Приоритет: переменные окружения > config.py
 
-BOT_TOKEN = os.getenv("BOT_TOKEN", CONFIG_BOT_TOKEN)
-
-try:
-    ADMIN_ID = int(os.getenv("ADMIN_ID", str(CONFIG_ADMIN_ID)))
-except ValueError:
-    ADMIN_ID = CONFIG_ADMIN_ID
-
 if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
     logger.error(
         "BOT_TOKEN не установлен! "

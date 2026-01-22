@@ -23,7 +23,14 @@ from aiogram.types import (
 try:
     load_dotenv()
     BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-    ADMIN_ID = int(os.getenv("ADMIN_ID", ""))
+    # Поддержка нескольких админов через запятую
+    admin_ids_str = os.getenv("ADMIN_IDS", "")
+    if admin_ids_str:
+        ADMIN_IDS = [int(admin_id.strip()) for admin_id in admin_ids_str.split(",") if admin_id.strip()]
+    else:
+        # Обратная совместимость с ADMIN_ID
+        admin_id = os.getenv("ADMIN_ID", "")
+        ADMIN_IDS = [int(admin_id)] if admin_id else []
 except ImportError:
     logging.warning(".env не найден. Используйте переменные окружения или создайте config.py")
 
@@ -46,10 +53,10 @@ if BOT_TOKEN == "YOUR_BOT_TOKEN_HERE" or not BOT_TOKEN:
         "Установите BOT_TOKEN в config.py или через переменную окружения BOT_TOKEN"
     )
 
-if not ADMIN_ID:
+if not ADMIN_IDS:
     logger.error(
-        "ADMIN_ID не установлен! "
-        "Установите ADMIN_ID в config.py или через переменную окружения ADMIN_ID"
+        "ADMIN_IDS не установлен! "
+        "Установите ADMIN_IDS в .env через переменную окружения ADMIN_IDS (разделяйте ID запятыми)"
     )
 
 
@@ -268,51 +275,52 @@ async def process_selfie(message: Message, state: FSMContext) -> None:
     
     await state.update_data(questionnaire=q_dict)
 
-    # Теперь отправляем всю анкету админу
-    if ADMIN_ID:
+    # Теперь отправляем всю анкету всем админам
+    if ADMIN_IDS:
         q = Questionnaire(**q_dict)
         text = format_questionnaire_text(message.from_user, q)
-        try:
-            # Отправляем текст анкеты
-            await message.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=build_admin_approval_keyboard(message.from_user.id),
-            )
-            # Отправляем фото паспорта
-            photos = q_dict.get("passport_photos") or []
-            for file_id in photos:
-                await message.bot.send_photo(
-                    chat_id=ADMIN_ID,
-                    photo=file_id,
-                    caption=f"Паспорт, пользователь {message.from_user.id}",
-                )
-            
-            # Отправляем селфи/материал
-            if message.photo:
-                await message.bot.send_photo(
-                    chat_id=ADMIN_ID,
-                    photo=message.photo[-1].file_id,
-                    caption=f"Селфи/материал от пользователя {message.from_user.id}",
-                )
-            elif message.video:
-                await message.bot.send_video(
-                    chat_id=ADMIN_ID,
-                    video=message.video.file_id,
-                    caption=f"Видео от пользователя {message.from_user.id}",
-                )
-            elif message.video_note:
-                await message.bot.send_video_note(
-                    chat_id=ADMIN_ID,
-                    video_note=message.video_note.file_id,
-                )
+        for admin_id in ADMIN_IDS:
+            try:
+                # Отправляем текст анкеты
                 await message.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=f"Видеосообщение от пользователя {message.from_user.id}",
+                    chat_id=admin_id,
+                    text=text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=build_admin_approval_keyboard(message.from_user.id),
                 )
-        except Exception as e:
-            logger.exception("Failed to send questionnaire to admin: %s", e)
+                # Отправляем фото паспорта
+                photos = q_dict.get("passport_photos") or []
+                for file_id in photos:
+                    await message.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=file_id,
+                        caption=f"Паспорт, пользователь {message.from_user.id}",
+                    )
+                
+                # Отправляем селфи/материал
+                if message.photo:
+                    await message.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=message.photo[-1].file_id,
+                        caption=f"Селфи/материал от пользователя {message.from_user.id}",
+                    )
+                elif message.video:
+                    await message.bot.send_video(
+                        chat_id=admin_id,
+                        video=message.video.file_id,
+                        caption=f"Видео от пользователя {message.from_user.id}",
+                    )
+                elif message.video_note:
+                    await message.bot.send_video_note(
+                        chat_id=admin_id,
+                        video_note=message.video_note.file_id,
+                    )
+                    await message.bot.send_message(
+                        chat_id=admin_id,
+                        text=f"Видеосообщение от пользователя {message.from_user.id}",
+                    )
+            except Exception as e:
+                logger.exception("Failed to send questionnaire to admin %s: %s", admin_id, e)
 
     await message.answer(
         "Спасибо! Материалы получены.\n\n"
@@ -328,7 +336,7 @@ async def process_selfie(message: Message, state: FSMContext) -> None:
 
 
 async def admin_approve_callback(callback: CallbackQuery, state: FSMContext, bot: Bot) -> None:
-    if callback.from_user.id != ADMIN_ID:
+    if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
 
@@ -368,7 +376,7 @@ async def admin_approve_callback(callback: CallbackQuery, state: FSMContext, bot
 
 
 async def admin_reject_callback(callback: CallbackQuery, bot: Bot) -> None:
-    if callback.from_user.id != ADMIN_ID:
+    if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
 
@@ -397,20 +405,21 @@ async def admin_reject_callback(callback: CallbackQuery, bot: Bot) -> None:
 async def process_pickup_info(message: Message, state: FSMContext) -> None:
     pickup_info = message.text.strip()
 
-    # Отправляем админу
-    if ADMIN_ID:
-        try:
-            await message.bot.send_message(
-                chat_id=ADMIN_ID,
-                text=(
-                    "<b>Адрес и время отправки материала от продавца</b>\n\n"
-                    f"<b>Пользователь:</b> <code>{message.from_user.id}</code>\n"
-                    f"<b>Информация:</b> {pickup_info}"
-                ),
-                parse_mode=ParseMode.HTML,
-            )
-        except Exception as e:
-            logger.exception("Failed to send pickup info to admin: %s", e)
+    # Отправляем всем админам
+    if ADMIN_IDS:
+        for admin_id in ADMIN_IDS:
+            try:
+                await message.bot.send_message(
+                    chat_id=admin_id,
+                    text=(
+                        "<b>Адрес и время отправки материала от продавца</b>\n\n"
+                        f"<b>Пользователь:</b> <code>{message.from_user.id}</code>\n"
+                        f"<b>Информация:</b> {pickup_info}"
+                    ),
+                    parse_mode=ParseMode.HTML,
+                )
+            except Exception as e:
+                logger.exception("Failed to send pickup info to admin %s: %s", admin_id, e)
 
     await message.answer(
         "Спасибо! Информация передана администратору. "
@@ -441,74 +450,79 @@ async def contact_admin_callback(callback: CallbackQuery, state: FSMContext) -> 
 
 
 async def handle_user_message_to_admin(message: Message, state: FSMContext) -> None:
-    """Пересылка сообщения от пользователя админу"""
-    if ADMIN_ID:
-        try:
-            user_info = f"<b>Сообщение от пользователя {message.from_user.id}</b>"
-            if message.from_user.username:
-                user_info += f" (@{message.from_user.username})"
-            user_info += ":\n\n"
-            
-            # Сохраняем ID пользователя для ответа
-            await state.update_data(user_id_for_reply=message.from_user.id)
-            
-            if message.text:
-                await message.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=user_info + message.text,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
-                )
-            elif message.photo:
-                await message.bot.send_photo(
-                    chat_id=ADMIN_ID,
-                    photo=message.photo[-1].file_id,
-                    caption=user_info + (message.caption or ""),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
-                )
-            elif message.video:
-                await message.bot.send_video(
-                    chat_id=ADMIN_ID,
-                    video=message.video.file_id,
-                    caption=user_info + (message.caption or ""),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
-                )
-            elif message.document:
-                await message.bot.send_document(
-                    chat_id=ADMIN_ID,
-                    document=message.document.file_id,
-                    caption=user_info + (message.caption or ""),
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
-                )
-            elif message.voice:
-                await message.bot.send_voice(
-                    chat_id=ADMIN_ID,
-                    voice=message.voice.file_id,
-                    caption=user_info,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
-                )
-            elif message.video_note:
-                await message.bot.send_video_note(
-                    chat_id=ADMIN_ID,
-                    video_note=message.video_note.file_id,
-                )
-                await message.bot.send_message(
-                    chat_id=ADMIN_ID,
-                    text=user_info,
-                    parse_mode=ParseMode.HTML,
-                    reply_markup=build_reply_to_user_keyboard(message.from_user.id),
-                )
-            
+    """Пересылка сообщения от пользователя всем админам"""
+    if ADMIN_IDS:
+        user_info = f"<b>Сообщение от пользователя {message.from_user.id}</b>"
+        if message.from_user.username:
+            user_info += f" (@{message.from_user.username})"
+        user_info += ":\n\n"
+        
+        # Сохраняем ID пользователя для ответа
+        await state.update_data(user_id_for_reply=message.from_user.id)
+        
+        sent_success = False
+        for admin_id in ADMIN_IDS:
+            try:
+                if message.text:
+                    await message.bot.send_message(
+                        chat_id=admin_id,
+                        text=user_info + message.text,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                    )
+                elif message.photo:
+                    await message.bot.send_photo(
+                        chat_id=admin_id,
+                        photo=message.photo[-1].file_id,
+                        caption=user_info + (message.caption or ""),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                    )
+                elif message.video:
+                    await message.bot.send_video(
+                        chat_id=admin_id,
+                        video=message.video.file_id,
+                        caption=user_info + (message.caption or ""),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                    )
+                elif message.document:
+                    await message.bot.send_document(
+                        chat_id=admin_id,
+                        document=message.document.file_id,
+                        caption=user_info + (message.caption or ""),
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                    )
+                elif message.voice:
+                    await message.bot.send_voice(
+                        chat_id=admin_id,
+                        voice=message.voice.file_id,
+                        caption=user_info,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                    )
+                elif message.video_note:
+                    await message.bot.send_video_note(
+                        chat_id=admin_id,
+                        video_note=message.video_note.file_id,
+                    )
+                    await message.bot.send_message(
+                        chat_id=admin_id,
+                        text=user_info,
+                        parse_mode=ParseMode.HTML,
+                        reply_markup=build_reply_to_user_keyboard(message.from_user.id),
+                    )
+                sent_success = True
+            except Exception as e:
+                logger.exception("Failed to forward message to admin %s: %s", admin_id, e)
+        
+        if sent_success:
             await message.answer(
-                "Ваше сообщение отправлено администратору. Ожидайте ответа.",
+                "Ваше сообщение отправлено администраторам. Ожидайте ответа.",
                 parse_mode=ParseMode.HTML,
             )
-        except Exception as e:
-            logger.exception("Failed to forward message to admin: %s", e)
+        else:
             await message.answer(
                 "Произошла ошибка при отправке сообщения. Попробуйте позже.",
                 parse_mode=ParseMode.HTML,
@@ -517,7 +531,7 @@ async def handle_user_message_to_admin(message: Message, state: FSMContext) -> N
 
 async def handle_admin_reply(message: Message, state: FSMContext) -> None:
     """Обработка ответа админа пользователю через reply"""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         return
     
     # Проверяем, является ли это ответом на сообщение
@@ -594,7 +608,7 @@ async def handle_admin_reply(message: Message, state: FSMContext) -> None:
 
 async def reply_to_user_callback(callback: CallbackQuery, state: FSMContext) -> None:
     """Обработка нажатия кнопки ответа пользователю"""
-    if callback.from_user.id != ADMIN_ID:
+    if callback.from_user.id not in ADMIN_IDS:
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
     
@@ -608,7 +622,7 @@ async def reply_to_user_callback(callback: CallbackQuery, state: FSMContext) -> 
         storage=callback.message.bot.dispatcher.storage,  # type: ignore[attr-defined]
         key=StorageKey(
             chat_id=callback.message.chat.id,  # Чат админа
-            user_id=ADMIN_ID,  # ID админа
+            user_id=callback.from_user.id,  # ID текущего админа
             bot_id=callback.message.bot.id,  # ID бота
         ),
     )
@@ -627,7 +641,7 @@ async def reply_to_user_callback(callback: CallbackQuery, state: FSMContext) -> 
 
 async def handle_admin_reply_message(message: Message, state: FSMContext) -> None:
     """Обработка сообщения от админа для отправки пользователю"""
-    if message.from_user.id != ADMIN_ID:
+    if message.from_user.id not in ADMIN_IDS:
         return
     
     if message.text and message.text.strip() == "/cancel":
@@ -757,14 +771,14 @@ def setup_handlers(dp: Dispatcher) -> None:
     dp.message.register(
         handle_admin_reply_message,
         QuestionnaireStates.admin_replying,
-        F.from_user.id == ADMIN_ID,
+        lambda msg: msg.from_user.id in ADMIN_IDS,
     )
     
     # Обработчик ответов админа через reply (должен быть последним, чтобы не перехватывать другие сообщения)
     dp.message.register(
         handle_admin_reply,
         F.reply_to_message,
-        F.from_user.id == ADMIN_ID,
+        lambda msg: msg.from_user.id in ADMIN_IDS,
     )
 
 

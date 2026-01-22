@@ -245,7 +245,7 @@ async def finish_passport_photos(message: Message, state: FSMContext) -> None:
 
     await message.answer(
         "Теперь пришлите, пожалуйста, "
-        "<b>селфи или видеосообщение</b> с материалом и паспортом "
+        "<b>селфи или видеосообщение</b> с материалом или паспортом "
         "в хорошем качестве.",
         parse_mode=ParseMode.HTML,
     )
